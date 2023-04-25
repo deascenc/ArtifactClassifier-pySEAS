@@ -6,26 +6,26 @@ Authors: Sydney C. Weiser and Brian R. Mullen
 Date: 2019-04-06
 '''
 
-
-
-import wholeBrain as wb
-import numpy as np
-import pandas as pd
-import scipy
 import os 
 import re
 import sys
-# import math
+
+# import wholeBrain as wb
+import numpy as np
+import pandas as pd
+
+sys.path.append('/home/feldheimlab/Documents/pySEAS/')
+
 import seaborn as sns
+import matplotlib 
+import matplotlib.pyplot as plt
 #from sklearn.externals import joblib
 
+import scipy
 from skimage.measure import label, regionprops
-from waveletAnalysis import waveletAnalysis as wave
 from multiprocessing import Process, Array, cpu_count, Manager
 from sklearn.model_selection import StratifiedShuffleSplit
-import matplotlib 
-#matplotlib.use("Qt5Agg")
-import matplotlib.pyplot as plt
+
 from scipy.signal import argrelextrema
 
 try:
@@ -40,6 +40,12 @@ except Exception as e:
     print('Error importing seas.signalanalysis')
     print('\t ERROR : ', e)
 
+try:
+    from seas.waveletAnalysis import waveletAnalysis as wave
+except Exception as e:
+    print('Error importing seas.waveletAnalysis')
+    print('\t ERROR : ', e)
+    
 
 def sortNoise(timecourses=None, lag1=None, return_logpdf=False, method='KDE', verbose=False):
     '''
