@@ -36,20 +36,21 @@ if __name__ == '__main__':
     # Argument Parsing
     # -----------------------------------------------
     ap = argparse.ArgumentParser()
-    ap.add_argument('-i', '--input', type = argparse.FileType('r'), 
+    ap.add_argument('-tsv', '--input_tsv', type = argparse.FileType('r'), 
         nargs = '+', required = False, 
         help = 'path to the .tsv file for classification')
+    ap.add_argument('-h5', '--input_hdf5', type = argparse.FileType('r'), 
+        nargs = '+', required = False, 
+        help = 'path to the .hdf5 file for updating artifact classifications')
     ap.add_argument('-uc', '--updateClass', default = None,
         nargs = '+', required = False, 
-        help = 'directory to ica.hdf5, put the tsv path into the input arguemnt,\
-        updates the ica.hdf5 based on classifier and .tsv file')
+        help = 'directory to ica.hdf5, put the tsv path into the input argument,\
+        updates the ica.hdf5 based on classifier model and metrics .tsv file')
     ap.add_argument('-t','--train', action='store_true',
         help = 'train the classifier on the newest class_metric dataframe')
     ap.add_argument('-fc', '--force', action='store_true',
         help = 'force re-calculation')
-    ap.add_argument('-cf', '--classifier', 
-        default = './classifier.hdf5',
-        type = argparse.FileType('r'), 
+    ap.add_argument('-cf', '--classifier', default = './classifier.hdf5', 
         nargs = '+', required = False, 
         help = 'path to the classifier.hdf5 file')
     ap.add_argument('-p', '--plot', action='store_true',
@@ -58,28 +59,12 @@ if __name__ == '__main__':
 
     parent_dir = os.path.split(os.getcwd())[0]
 
-    classifier = None
-    assert()
+    classifier = args['classifier'][0]
+    assert os.path.exists(classifier), '{} not found'.format(path)
 
-    if args['classifier'] is None:
-        for path in classifier_list:
-            if os.path.exists(path):
-                classifier = path
-                print ('Classifier found at ' + classifier)
-    else:
-        classifier = args['classifier']
-        if os.path.exists(classifier):
-            print ('Classifier found at ' + classifier)
-        else:
-            classifier = None
-    assert (classifier != None), 'Classifier file not found.'
-    
-    classMetricsPath = classifier[:-5] + '_metrics.tsv'
-    thumbnailPath = classifier[:-5] + '_thumbnail.hdf5'
     confidencePath = classifier[:-5] + '_confidence.tsv'
     class_dir = os.path.dirname(classifier)
     update = False
-    group = False
 
     if args['input'] != None:
         paths = [path.name for path in args['input']]
@@ -89,10 +74,7 @@ if __name__ == '__main__':
         for path in paths:
             print('Processing file:', path)
 
-            if path.endswith('.hdf5'):
-                 assert 
-
-            elif path.endswith('.tsv'):
+            if path.endswith('.tsv'):
                 try:
                     hdf5path = path.replace('_metrics.tsv', '.hdf5')
                     savepath = path
@@ -190,7 +172,7 @@ if __name__ == '__main__':
                         except Exception as e:
                             print(e)
                         main_data = main_data.sort_index()
-                        main_data = main_data.append(data, sort=True)
+                        main_data = pd.concat([main_data, data])
                         main_data = main_data.loc[~main_data.index.duplicated(keep='last')]
                         main_data = main_data.sort_index()
 
