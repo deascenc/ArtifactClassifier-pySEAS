@@ -15,9 +15,13 @@ import numpy as np
 import pandas as pd
 
 sys.path.append('/home/feldheimlab/Documents/pySEAS/')
+# data visualization
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 #ML packages
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.naive_bayes import GaussianNB
@@ -30,22 +34,39 @@ except Exception as e:
     print('Error importing hdf5manager')
     print('\t ERROR : ', e)
 
+def splitData(dataFrame, signal, value_fill=0, n_splits=10, test_size=0.30):
+        
+        y = signal
+        X = dataFrame.fillna(value=value_fill)
+
+        sss = StratifiedShuffleSplit(n_splits=n_splits, test_size=test_size)#random_state=42)
+        for train_index, test_index in sss.split(X, y):
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+
+        return X_train, X_test, y_train, y_test
 
 if __name__ == '__main__':
 
+    import argparse
+    import time
     # Argument Parsing
     # -----------------------------------------------
     ap = argparse.ArgumentParser()
-    ap.add_argument('-tsv', '--input_tsv', type = argparse.FileType('r'), 
+    ap.add_argument('-i', '--input_tsv', type = argparse.FileType('r'), 
         nargs = '+', required = False, 
         help = 'path to the .tsv file for classification')
     ap.add_argument('-h5', '--input_hdf5', type = argparse.FileType('r'), 
         nargs = '+', required = False, 
         help = 'path to the .hdf5 file for updating artifact classifications')
-    ap.add_argument('-uc', '--updateClass', default = None,
+    ap.add_argument('-uc', '--updateClass', action='store_true',
+        help = 'updates the ica.hdf5 based on classifier model and metrics .tsv file\
+        requires tsv and hdf5 inputs')
+    ap.add_argument('-g', '--group_path', default = None,
         nargs = '+', required = False, 
-        help = 'directory to ica.hdf5, put the tsv path into the input argument,\
-        updates the ica.hdf5 based on classifier model and metrics .tsv file')
+        help = 'save path to a file that groups the experiment.  If used\
+         on experiments that have already been characterized, this will force \
+         the re-calculation of any already processed datafile')
     ap.add_argument('-t','--train', action='store_true',
         help = 'train the classifier on the newest class_metric dataframe')
     ap.add_argument('-fc', '--force', action='store_true',
@@ -56,220 +77,157 @@ if __name__ == '__main__':
     ap.add_argument('-p', '--plot', action='store_true',
         help= 'Vizualize training outcome')
     args = vars(ap.parse_args())
+    
 
-    parent_dir = os.path.split(os.getcwd())[0]
 
     classifier = args['classifier'][0]
-    assert os.path.exists(classifier), '{} not found'.format(path)
-
-    confidencePath = classifier[:-5] + '_confidence.tsv'
     class_dir = os.path.dirname(classifier)
-    update = False
+    assert os.path.exists(class_dir), 'Classifier directory does not exist: {}'.format(class_dir)
+    confidencepath = classifier[:-5] + '_confidence.tsv'
 
-    if args['input'] != None:
-        paths = [path.name for path in args['input']]
+    try:
+        group = args['group_path'][0]
+        assert os.path.exists(os.path.dirname(group)), 'Unknown directory for group save: {}'.format(group)
+    except:
+        group = None
+
+    if args['updateClass']:
+        hdf5path = args['input_hdf5'][0]
+        assert os.path.exists(hdf5path), 'Could not find hdf5 file: {}'.format(hdf5path)
+
+    try:
+        g = h5(classifier)
+        print('Loading metric list to train the classifier from:', classifier)
+        domain_vars = g.load('domain_keys')
+        rnd_clf = g.load('rnd_clf')
+    except:
+        assert args['train'], 'No classifier found. Please train a classifier.'
+        domain_vars =['spatial.min', 'spatial.max', #spatial metrics
+                      'region.minaxis', 'threshold.area', 'region.extent', #morphometrics
+                      'threshold.perc', 'region.majaxis', 'region.majmin.ratio', 
+                      'temporal.min', #temporal metric
+                      'freq.rangesz'] #frequency metric
+
+    if args['input_tsv'] != None:
+        paths = [path.name for path in args['input_tsv']]
         print('Input found:')
         [print('\t'+path) for path in paths]
 
+        p = -1
         for path in paths:
             print('Processing file:', path)
-
-            if path.endswith('.tsv'):
-                try:
-                    hdf5path = path.replace('_metrics.tsv', '.hdf5')
-                    savepath = path
-
-                print("No signal componets are found. Classifying components...")
-                if path.endswith('.tsv'):
-                    hdf5path = path.replace('_metrics.tsv', '.hdf5')
-                    savepath = path
-
-                elif path.endswith('.hdf5'):
-                    hdf5path = path
-                    data = pd.read_csv(savepath, sep = '\t', index_col='exp_ic')
-                    update = True
-
-                #put the dataframe on a scale 0 to 1 (expect age) and select only non-noise
-                try:
-                    datacopy = data.drop('age', axis =1).copy()
-                except Exception as e:
-                    print ('ERROR: ', e)
-                    datacopy = data.copy()
-
-                datacopy -= datacopy.min()
-                datacopy /= datacopy.max()
-                
-                try:
-                    datacopy['age'] = data['age']
-                except Exception as e:
-                    print ('ERROR: ', e)
-
-                g = h5(classifier)
-                print('Loading metric list to train the classifier from:', classifier)
-                domain_vars = g.load('domain_keys')
-                nodomain_vars = g.load('nodomain_keys') 
-
-                print('\nTraining classifier with full dataset:')
-
-                try:
-                    main_data = pd.read_csv(classMetricsPath, sep = '\t', index_col='exp_ic')
-                    print('\tImporting class metrics dataframe')
-                    print(main_data.head())
-                except Exception as e:
-                    main_data = pd.DataFrame()
-                    print('\tError importing class metrics dataFrame')
-                    print('\tERROR : ', e)
-                    assert not main_data.empty, 'Check path to metrics dataframe'
-
-
-                
-                domain = main_data.loc[main_data['threshold.area'] != 0].copy()
-                nodomain = main_data.loc[main_data['threshold.area'] == 0].copy()
-
-                y_train = domain['signal']
-                X_train = domain[domain_vars]
-                y2_train = nodomain['signal']
-                X2_train = nodomain[nodomain_vars]
-                
-                rnd_clf = RandomForestClassifier(n_estimators = 40, max_features = 2)
-                rnd_clf2 = RandomForestClassifier(n_estimators = 40, max_features = 2)
-
-                rnd_clf.fit(X_train, y_train)
-                rnd_clf2.fit(X2_train, y2_train)
-
-                print('\tTraining classifier')
-                domain = datacopy.loc[datacopy['threshold.area'] != 0].copy()
-                nodomain = datacopy.loc[datacopy['threshold.area'] == 0].copy()
-
-                domain = domain.fillna(value=0).loc[:, domain_vars]
-                nodomain = nodomain.fillna(value=0).loc[:, nodomain_vars]
-
-                print('\tPredicting classes')
-                #run classifier
-                data.loc[domain.index, 'm_signal'] = rnd_clf.predict(domain)
-                data.loc[nodomain.index, 'm_signal'] = rnd_clf2.predict(nodomain)
-
-                update = True
-
-                # data['artifact'] = np.array(data['m_signal'] == 0).astype(int)
-                # data.sort_index()
-                # print('\tSaving artifact_component to ', hdf5path)
-
-                # f = h5(hdf5path)
-                # noise = f.load('noise_components')
-                # artifact = noise.copy() * 0
-                # artifact[noise==0] = data['artifact'].values.tolist()
-                # f.save({'artifact_components':artifact})
-
-            #Save file for future manipulations
-            if update:
-                if group:
-                    if os.path.exists(savepath):
-                        print('Updating exisiting file: ', savepath)
-                        main_data = pd.read_csv(savepath, sep = '\t', index_col='exp_ic')
-                        try:
-                            main_data.drop(columns = 'anml')
-                        except Exception as e:
-                            print(e)
-                        main_data = main_data.sort_index()
-                        main_data = pd.concat([main_data, data])
-                        main_data = main_data.loc[~main_data.index.duplicated(keep='last')]
-                        main_data = main_data.sort_index()
-
-                        current_anml = 'nope'
-                        j=0
-                        for i in main_data.index.to_list():
-                            if current_anml == i[:9]:
-                                main_data.loc[i, 'anml'] = j
-                            else:
-                                current_anml = i[:9]
-                                j+=1
-                                main_data.loc[i, 'anml'] = j
-                                
-                        print('\nNumber of missing rows for the full dataset: {0} of {1}'.format(np.sum(np.isnan(main_data['temporal.min'])), len(main_data)))
-                        main_data.to_csv(savepath, sep = '\t')
-                    else:
-                        print('Creating NEW file: ', savepath)
-                        data.to_csv(savepath, sep = '\t')
+            if path.endswith('.tsv') & os.path.exists(path):
+                p += 1
+                print('Loading data: ', path)
+                if p == 0:
+                    main_data = pd.read_csv(path, sep = '\t', index_col='exp_ic')
                 else:
-                    print('\nSaving dataframe to:', savepath)
-                    data.to_csv(savepath, sep = '\t')
+                    data = pd.read_csv(path, sep = '\t', index_col='exp_ic')
+                    main_data = pd.concat([main_data, data])         
             else:
-                print('Metrics have already been made and artifact components have already been defined.')
-                print('No changes were made to either file.  Check flags if you would like to update')
-                print('either the experimental metrics or the class metrics.')
-                print('Add the force flag if you would like to force the re-calculations.')
+                print('DATA NOT FOUND OR UNKNOWN FILE FORMAT: ', path)
+
+        main_data = main_data.sort_index()
+        main_data = main_data.loc[~main_data.index.duplicated(keep='last')]
+        main_data = main_data.sort_index()
+        print('\nNumber of missing rows for the full dataset: {0} of {1}'.format(np.sum(np.isnan(main_data['temporal.min'])), len(main_data)))
+        
+        if p == 0: 
+            group_load = False
+
+    if args['updateClass']:
+        
+        print("Updating the classification of components based on current classifier.")
+
+        try:
+            datacopy = main_data.drop('age', axis =1).copy()
+        except Exception as e:
+            print ('ERROR: ', e)
+            datacopy = main_data.copy()
+
+        scaler = StandardScaler()
+        scaler.fit(datacopy.values)
+        datacopy[:] = scaler.transform(datacopy.values)
+
+        print('\nClassifying the full dataset:')
+        
+        X_train = datacopy[domain_vars].fillna(value=0)
+
+        try:
+            y_train = main_data['neural'].fillna(value=0)
+            print('Loading signal data')
+
+        except Exception as e:
+            print ('ERROR: ', e)
+            print('Loading signal data')
+            y_train = main_data['signal'].fillna(value=0)
+            print('ytrain loaddd')
+
+        if np.sum(y_train) == 0:
+            print('No classifications were found.')
+            print('\tPredicting classes')
+            new = True
+        else:
+            print('Previous classification found.')
+            print('\tPredicting classes, saving as a new column')
+            new = False
+
+        #run classifier
+        main_data['m_signal'] = rnd_clf.predict(X_train)
+
+        if not new:
+            accuracy = np.sum(main_data['m_signal']==main_data['signal'])/len(main_data)
+            print('Accuracy comparing human to machine classification: {} %'.format(np.round(accuracy*100,2)))
+
+        main_data['artifact'] = np.array(main_data['m_signal'] == 0).astype(int)
+        print('\tSaving artifact_component to ', hdf5path)
+        
+        if os.path.exists(hdf5path):
+            f = h5(hdf5path)
+            noise = f.load('noise_components')
+            notnoise_index = np.where(noise==0)[0]
+            indices = [base[:-9] + '-' + '{}'.format(str(i).zfill(4)) for i in notnoise_index]
+            artifact = noise.copy() * 0
+            artifact[notnoise_index] = main_data.loc[indices, 'artifact'].values.tolist()
+            f.save({'artifact_components': artifact})
+        else:
+            print('hdf5 file was not found or specified.')
+
+        if group == None:
+            if group_load:
+                print('Multiple files loaded, unsure as to what to save the file as. If you desire this data to be saved, use the group_path argument')
+            else:
+                main_data.to_csv(path, sep = '\t')
+        else:
+            main_data.to_csv(group, sep = '\t')
+        
+
+    #Save file for future manipulations
 
     if args['train']:
-        if not args['updateDF']:
-            try:
-                main_data = pd.read_csv(classMetricsPath, sep = '\t', index_col='exp_ic')
-                print('Importing dataframe\n------------------------------------')
-                print(main_data.head())
-            except Exception as e:
-                main_data = pd.DataFrame()
-                print('Error importing dataFrame')
-                print('\t ERROR : ', e)
-                assert not main_data.empty, 'Check path to metrics dataframe'
 
-
-        
-        #load classfier hdf5
         g = h5(classifier)
 
-        #Current variables for training
-        domain_vars = [
-                     #spatial metrics
-                     'spatial.min', 
-                     'spatial.max', 
-                     'threshold.area',
-                     'region.extent', 
-                     'region.minaxis', 'region.majaxis',
-                     'region.eccentricity',
-                     #temporal metrics
-                     'freq.rangesz',
-                     'temporal.max', 'temporal.std',  
-                     'freq.range.low', 'freq.range.high']
+        try:
+            datacopy = main_data.drop('age', axis =1).copy()
+        except Exception as e:
+            print ('ERROR: ', e)
+            datacopy = main_data.copy()
 
-        nodomain_vars =['spatial.min',
-            'spatial.max',
-            'spatial.COMdom.x',
-            'spatial.COMdom.y',
-            'freq.maxsnr',
-            'spatial.std',
-            'temporal.max',
-            'temporal.autocorr',
-            'freq.range.low',
-            'temporal.std',
-            'temporal.min']
+        scaler = StandardScaler()
+        scaler.fit(datacopy.values)
+        datacopy[:] = scaler.transform(datacopy.values)
+        datacopy = datacopy.fillna(value=0)
 
-        # for when the training keys get saved
-        # new_vars = above_threshold_vars
-        
-        # for var in below_threshold_vars:
-        #     if var in new_vars:
-        #         pass
-        #     else:
-        #         new_vars.append(var)
-        
-        domain = main_data.loc[main_data['threshold.area'] != 0].copy()
-        nodomain = main_data.loc[main_data['threshold.area'] == 0].copy()
-        
-        X_train, X_test, y_train, y_test = splitData(domain.loc[:,domain_vars].copy(), domain.loc[:,'signal'].copy())
-        X2_train, X2_test, y2_train, y2_test = splitData(nodomain.loc[:,nodomain_vars].copy(), nodomain.loc[:,'signal'].copy())
+        try:
+            X_train, X_test, y_train, y_test = splitData(datacopy.loc[:,domain_vars].copy(), main_data.loc[:,'neural'].fillna(value=0).copy())
+        except: 
+            X_train, X_test, y_train, y_test = splitData(datacopy.loc[:,domain_vars].copy(), main_data.loc[:,'signal'].fillna(value=0).copy())
 
-        Xlen = len(domain)
-        X2len = len(nodomain)
-
-        Xfraction = Xlen / (Xlen + X2len)
-        X2fraction = X2len / (Xlen + X2len) 
+        Xlen = len(main_data)
 
         classConfidence = pd.DataFrame(index=main_data.index)
 
-        #X_train, X_test, y_train, y_test = train_test_split(X[new_vars], y, 
-        #    test_size=0.3) # random_state=42)
-
-        #headers
         #Logistic Regression
         logreg = LogisticRegression(C  = 8.25, solver = 'newton-cg', max_iter = 17.25)
         
@@ -284,24 +242,6 @@ if __name__ == '__main__':
 
         classConfidence.loc[X_test.index, 'logreg_prob'] = logreg.predict_proba(X_test)[:,1]
         classConfidence.loc[X_train.index, 'logreg_prob'] = logreg.predict_proba(X_train)[:,1]
-
-        logreg.fit(X2_train, y2_train)
-        y2_pred = logreg.predict(X2_test)
-
-        logreg_score2 = logreg.score(X2_test, y2_test)
-        logreg_precision2 =  precision_score(y2_test, y2_pred)
-        logreg_recall2 = recall_score(y2_test, y2_pred)
-        logreg_signal2 = (np.sum(((y2_pred==1) & (y2_test==1))))/(np.sum((y2_test==1)))
-        logreg_artifact2 = (np.sum(((y2_pred==0) & (y2_test==0))))/(np.sum(y2_test==0))
-
-        logreg_score = (Xfraction * logreg_score) + (X2fraction * logreg_score2)
-        logreg_precision = (Xfraction * logreg_precision) + (X2fraction * logreg_precision2)
-        logreg_recall = (Xfraction * logreg_precision) + (X2fraction * logreg_precision2)
-        logreg_signal = (Xfraction * logreg_precision) + (X2fraction * logreg_precision2)
-        logreg_artifact = (Xfraction * logreg_precision) + (X2fraction * logreg_precision2)
-    
-        classConfidence.loc[X2_test.index, 'logreg_prob'] = logreg.predict_proba(X2_test)[:,1]
-        classConfidence.loc[X2_train.index, 'logreg_prob'] = logreg.predict_proba(X2_train)[:,1]
 
         #Gaussian Naive Bayes
         gnb_clf = GaussianNB(var_smoothing= 0.009)
@@ -318,24 +258,6 @@ if __name__ == '__main__':
         classConfidence.loc[X_test.index, 'gnb_prob'] = gnb_clf.predict_proba(X_test)[:,1]
         classConfidence.loc[X_train.index, 'gnb_prob'] = gnb_clf.predict_proba(X_train)[:,1]
 
-        gnb_clf.fit(X2_train, y2_train)
-        y2_pred = gnb_clf.predict(X2_test)
-
-        gnb_score2 = gnb_clf.score(X2_test, y2_test)
-        gnb_precision2 =  precision_score(y2_test, y2_pred)
-        gnb_recall2 = recall_score(y2_test, y2_pred)
-        gnb_signal2 = (np.sum(((y2_pred==1) & (y2_test==1))))/(np.sum((y2_test==1)))
-        gnb_artifact2 = (np.sum(((y2_pred==0) & (y2_test==0))))/(np.sum(y2_test==0))
-
-        gnb_score = (Xfraction * gnb_score) + (X2fraction * gnb_score2)
-        gnb_precision = (Xfraction * gnb_precision) + (X2fraction * gnb_precision2)
-        gnb_recall = (Xfraction * gnb_precision) + (X2fraction * gnb_precision2)
-        gnb_signal = (Xfraction * gnb_precision) + (X2fraction * gnb_precision2)
-        gnb_artifact = (Xfraction * gnb_precision) + (X2fraction * gnb_precision2)
-    
-        classConfidence.loc[X2_test.index, 'gnb_prob'] = gnb_clf.predict_proba(X2_test)[:,1]
-        classConfidence.loc[X2_train.index, 'gnb_prob'] = gnb_clf.predict_proba(X2_train)[:,1]
-
         # Support Vector Machine Gaussian Kernal
         svm_clf = SVC(kernel="rbf", gamma=0.7, C=8, probability= True, degree=.01)
         
@@ -351,45 +273,7 @@ if __name__ == '__main__':
         classConfidence.loc[X_test.index, 'SVC_prob'] = svm_clf.predict_proba(X_test)[:,1]
         classConfidence.loc[X_train.index, 'SVC_prob'] = svm_clf.predict_proba(X_train)[:,1]
 
-        svm_clf.fit(X2_train, y2_train)
-        y2_pred = svm_clf.predict(X2_test)
-
-        svm_score2 = svm_clf.score(X2_test, y2_test)
-        svm_precision2 =  precision_score(y2_test, y2_pred)
-        svm_recall2 = recall_score(y2_test, y2_pred)
-        svm_signal2 = (np.sum(((y2_pred==1) & (y2_test==1))))/(np.sum((y2_test==1)))
-        svm_artifact2 = (np.sum(((y2_pred==0) & (y2_test==0))))/(np.sum(y2_test==0))
-
-        svm_score = (Xfraction * svm_score) + (X2fraction * svm_score2)
-        svm_precision = (Xfraction * svm_precision) + (X2fraction * svm_precision2)
-        svm_recall = (Xfraction * svm_precision) + (X2fraction * svm_precision2)
-        svm_signal = (Xfraction * svm_precision) + (X2fraction * svm_precision2)
-        svm_artifact = (Xfraction * svm_precision) + (X2fraction * svm_precision2)
-     
-        classConfidence.loc[X2_test.index, 'SVC_prob'] = svm_clf.predict_proba(X2_test)[:,1]
-        classConfidence.loc[X2_train.index, 'SVC_prob'] = svm_clf.predict_proba(X2_train)[:,1]
-
         #Random Forest Classifier
-        # forest_scores = [0]*50
-        # forest_art = [0]*50
-        # for i in range(50):
-        #     sys.stdout.write("\rRunnning {0}/50".format(i+1))
-        #     sys.stdout.flush()
-        #     rnd_clf = RandomForestClassifier(n_estimators = 40, max_features = 2)
-        #     rnd_clf.fit(X_train, y_train)
-        #     y_pred = rnd_clf.predict(X_test)
-
-        #     rnd_score = rnd_clf.score(X_test, y_test)
-        #     rnd_precision =  precision_score(y_test, y_pred)
-        #     rnd_recall = recall_score(y_test, y_pred)
-        #     rnd_signal = (np.sum(((y_pred==1) & (y_test==1))))/(np.sum((y_test==1)))
-        #     rnd_artifact = (np.sum(((y_pred==0) & (y_test==0))))/(np.sum(y_test==0))
-        #     classConfidence.loc[X_test.index, 'rnd_clf_prob'] = rnd_clf.predict_proba(X_test)[:,1]
-        #     classConfidence.loc[X_train.index, 'rnd_clf_prob'] = rnd_clf.predict_proba(X_train)[:,1]
-
-        #     forest_scores[i] = rnd_score
-        #     forest_art[i] = rnd_artifact
-
         rnd_clf = RandomForestClassifier(n_estimators = 40, max_features = 2)
         rnd_clf.fit(X_train, y_train)
         y_pred = rnd_clf.predict(X_test)
@@ -402,41 +286,6 @@ if __name__ == '__main__':
         
         classConfidence.loc[X_test.index, 'rnd_clf_prob'] = rnd_clf.predict_proba(X_test)[:,1]
         classConfidence.loc[X_train.index, 'rnd_clf_prob'] = rnd_clf.predict_proba(X_train)[:,1]
-
-        rnd_clf2 = RandomForestClassifier(n_estimators = 40, max_features = 2)
-        rnd_clf2.fit(X2_train, y2_train)
-        y2_pred = rnd_clf2.predict(X2_test)
-
-        rnd_score2 = rnd_clf2.score(X2_test, y2_test)
-        rnd_precision2 =  precision_score(y2_test, y2_pred)
-        rnd_recall2 = recall_score(y2_test, y2_pred)
-        rnd_signal2 = (np.sum(((y2_pred==1) & (y2_test==1))))/(np.sum((y2_test==1)))
-        rnd_artifact2 = (np.sum(((y2_pred==0) & (y2_test==0))))/(np.sum(y2_test==0))
-
-        rnd_score = (Xfraction * rnd_score) + (X2fraction * rnd_score2)
-        rnd_precision = (Xfraction * rnd_precision) + (X2fraction * rnd_precision2)
-        rnd_recall = (Xfraction * rnd_precision) + (X2fraction * rnd_precision2)
-        rnd_signal = (Xfraction * rnd_precision) + (X2fraction * rnd_precision2)
-        rnd_artifact = (Xfraction * rnd_precision) + (X2fraction * rnd_precision2)
-
-        classConfidence.loc[X2_test.index, 'rnd_clf_prob'] = rnd_clf2.predict_proba(X2_test)[:,1]
-        classConfidence.loc[X2_train.index, 'rnd_clf_prob'] = rnd_clf2.predict_proba(X2_train)[:,1]
-
-        # print('\n\nForest Scores: ', np.round(forest_scores, decimals = 2))
-        # print('\nForest Artifact Accuracy: ', np.round(forest_art, decimals = 2))
-        # forest_scores = np.asarray(forest_scores)
-        # forest_scores_avg = forest_scores.sum() / len(forest_scores)
-        # forest_scores_std = forest_scores.std()
-
-        # forest_art = np.asarray(forest_art)
-        # forest_art_avg = forest_art.sum() / len(forest_art)
-        # forest_art_std = forest_art.std()
-
-        # print('\nScore Average: {0}\nScore Std Dev: {1}'.format(np.round(forest_scores_avg, decimals = 2), 
-        #   np.round(forest_scores_std, decimals = 4)))
-        # print('\nArtifact Average: {0}\nArtifact Std Dev: {1}'.format(np.round(forest_art_avg, decimals =2), 
-        #   np.round(forest_art_avg, decimals =4)))        
-        
 
         #Voting Classifier
         voting_clf = VotingClassifier(
@@ -454,30 +303,11 @@ if __name__ == '__main__':
         voting_artifact = (np.sum(((y_pred==0) & (y_test==0))))/(np.sum(y_test==0))
 
         classConfidence.loc[X_test.index, 'voting_clf_prob'] = voting_clf.predict_proba(X_test)[:,1]
-        classConfidence.loc[X_train.index, 'voting_clf_prob'] = voting_clf.predict_proba(X_train)[:,1]
+        classConfidence.loc[X_train.index, 'voting_clf_prob'] = voting_clf.predict_proba(X_train)[:,1]   
 
-        voting_clf.fit(X2_train, y2_train)
-        y2_pred = voting_clf.predict(X2_test)
-
-        voting_score2 = voting_clf.score(X2_test, y2_test)
-        voting_precision2 =  precision_score(y2_test, y2_pred)
-        voting_recall2 = recall_score(y2_test, y2_pred)
-        voting_signal2 = (np.sum(((y2_pred==1) & (y2_test==1))))/(np.sum((y2_test==1)))
-        voting_artifact2 = (np.sum(((y2_pred==0) & (y2_test==0))))/(np.sum(y2_test==0))
-
-        voting_score = (Xfraction * voting_score) + (X2fraction * voting_score2)
-        voting_precision = (Xfraction * voting_precision) + (X2fraction * voting_precision2)
-        voting_recall = (Xfraction * voting_precision) + (X2fraction * voting_precision2)
-        voting_signal = (Xfraction * voting_precision) + (X2fraction * voting_precision2)
-        voting_artifact = (Xfraction * voting_precision) + (X2fraction * voting_precision2)
-    
-        classConfidence.loc[X2_test.index, 'voting_clf_prob'] = voting_clf.predict_proba(X2_test)[:,1]
-        classConfidence.loc[X2_train.index, 'voting_clf_prob'] = voting_clf.predict_proba(X2_train)[:,1]        
-
-        newData = pd.DataFrame()
         scores_df = pd.DataFrame(columns=['classifier', 'score', 'precision', 'recall', 'signal acc.', 'artifact acc.'])
         scores_df.loc[0] = ['LogisticRegression'] + [logreg_score] + [logreg_precision] + [logreg_recall] + [logreg_signal] + [logreg_artifact]
-        # scores_df.loc[1] = ['GaussianNB'] + [gnb_score] + [gnb_precision] + [gnb_recall] + [gnb_signal] + [gnb_artifact]
+        scores_df.loc[1] = ['GaussianNB'] + [gnb_score] + [gnb_precision] + [gnb_recall] + [gnb_signal] + [gnb_artifact]
         scores_df.loc[2] = ['SVM'] + [svm_score] + [svm_precision] + [svm_recall] + [svm_signal] + [svm_artifact]
         scores_df.loc[3] = ['RandomForest'] + [rnd_score] + [rnd_precision] + [rnd_recall] + [rnd_signal] + [rnd_artifact]
         scores_df.loc[4] = ['Voting'] + [voting_score] + [voting_precision] + [voting_recall] + [voting_signal] + [voting_artifact]
@@ -486,24 +316,17 @@ if __name__ == '__main__':
         print('\n------------------------------------')
         print(scores_df.round(2))
         	
-        classConfidence.to_csv(confidencePath, sep = '\t')
+        classConfidence.to_csv(confidencepath, sep = '\t')
 
         g = h5(classifier)
         g.save({
-            'rnd_clf_domain':rnd_clf, 
-            'rnd_clf_nodomain': rnd_clf2, 
-            'domain_keys': domain_vars, 
-            'nodomain_keys': nodomain_vars})        
+            'rnd_clf':rnd_clf, 
+            'domain_keys': domain_vars})        
 
         if args['plot']:
             from sklearn.metrics import roc_auc_score
             from sklearn.metrics import roc_curve
             
-            # hist_x = [1, 2, 3, 4]
-            # hist_y = [1, 2, 3, 4]
-            # plt.plot(hist_x, hist_y, 'r.')
-            # plt.show()
-
             classConfidence = 2*(classConfidence - 0.5)
             # classConfidence.to_csv(classifier [:-5] + '_confidence.csv')
             start_exp = []
@@ -524,14 +347,10 @@ if __name__ == '__main__':
             
             classConfidence.loc[X_train.index,'predicted'] = rnd_clf.predict(X_train)
             classConfidence.loc[X_test.index,'predicted'] = rnd_clf.predict(X_test)
-            classConfidence.loc[X2_train.index,'predicted'] = rnd_clf2.predict(X2_train)
-            classConfidence.loc[X2_test.index,'predicted'] = rnd_clf2.predict(X2_test)
             classConfidence = classConfidence.sort_index()
-            # print(domain.index)
-            # print(nodomain.index)
+
             classConfidence['x'] = np.arange(len(classConfidence))
-            classConfidence.loc[domain.index, 'marked'] = domain.loc[domain.index, 'signal']
-            classConfidence.loc[nodomain.index, 'marked'] = nodomain.loc[nodomain.index, 'signal']
+            classConfidence.loc[main_data.index, 'marked'] = main_data.loc[main_data.index, 'signal']
             classConfidence['false'] = classConfidence['predicted'] - classConfidence['marked']
 
             for i, clf in enumerate(clfs):
@@ -555,7 +374,7 @@ if __name__ == '__main__':
                         plt.axvline(x=j, ymax = linemax, color = 'r', alpha=0.5, label = 'False Negative')
                         falseNeg = False
                     else:
-                        plt.axvline(x=j, ymax = line  , color = 'r', alpha=0.5)
+                        plt.axvline(x=j, ymax = linemax , color = 'r', alpha=0.5)
                 elif i > 0:
                     if falsePos:
                         plt.axvline(x=j, ymax = linemax, color = 'b', alpha=0.5, label = 'False Positive')
@@ -602,10 +421,11 @@ if __name__ == '__main__':
             plt.plot(fpr, tpr, label='Random Forest Classifier (area = %0.2f)' % roc_auc)
 
             voting_clf = VotingClassifier(
-                estimators=[#('lr', logreg), 
-                            #('gnb', gnb_clf), 
+                estimators=[('lr', logreg), 
+                            ('gnb', gnb_clf), 
                             ('rf', rnd_clf), 
                             ('svc', svm_clf)], voting='soft')
+
             voting_clf.fit(X_train, y_train)
 
             roc_auc = roc_auc_score(y_test, voting_clf.predict(X_test))
@@ -619,5 +439,5 @@ if __name__ == '__main__':
             plt.ylabel('True Positive Rate')
             plt.title('Receiver operating characteristic')
             plt.legend(loc="lower right")
-            plt.savefig('/home/ackmanlab/Documents/rnd_ROC.svg')
+            # plt.savefig('rnd_ROC.svg')
             plt.show()
