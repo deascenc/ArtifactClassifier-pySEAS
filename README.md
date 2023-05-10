@@ -177,5 +177,12 @@ If you give the `-uc` flag and `INPUT_HDF5`, the script will update the `ICA.hdf
 
 `python ML_classify.py -i ./data/novel_dataset.tsv -h5 path/to/*ICA.hdf5 -cf ../classifier/test_classifier.hdf5 -uc`
 
+The terminal will tell you which files are being updated:
+
+    Accuracy comparing human to machine classification: 96.27 %
+      Saving artifact_component to  ../../Desktop/hdf5test/190408_07-08_ica.hdf5
+      Saving artifact_component to  ../../Desktop/hdf5test/190423_03-04_ica.hdf5
+
+    Saving to file:  ./data/novel_dataset.tsv
 
 
