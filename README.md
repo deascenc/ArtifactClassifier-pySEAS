@@ -107,3 +107,75 @@ This base command will generate a metrics file names similar to the input ica fi
 
     python component_metrics.py -i /path/to/save/metrics/in/a/group/GROUP_metrics.tsv -uc /path/to/hdf5/files/XXXXXXXXX_ica.hdf5
 
+## Machine Learning script
+
+As the code is written, only the random forest classifier is saved. However, the script will train across multiple other models as well.
+
+    python ML_classify.py -h
+    usage: ML_classify.py [-h] [-i INPUT_TSV [INPUT_TSV ...]] [-h5 INPUT_HDF5 [INPUT_HDF5 ...]] [-uc] [-g GROUP_PATH [GROUP_PATH ...]]
+                          [-t] [-fc] [-cf CLASSIFIER [CLASSIFIER ...]] [-p]
+
+    optional arguments:
+      -h, --help            show this help message and exit
+      -i INPUT_TSV [INPUT_TSV ...], --input_tsv INPUT_TSV [INPUT_TSV ...]
+                            path to the .tsv file for classification
+      -h5 INPUT_HDF5 [INPUT_HDF5 ...], --input_hdf5 INPUT_HDF5 [INPUT_HDF5 ...]
+                            path to the .hdf5 file for updating artifact classifications
+      -uc, --updateClass    updates the ica.hdf5 based on classifier model and metrics .tsv file requires tsv and hdf5 inputs
+      -g GROUP_PATH [GROUP_PATH ...], --group_path GROUP_PATH [GROUP_PATH ...]
+                            save path to a file that groups the experiment. If used on experiments that have already been characterized,
+                            this will force the re-calculation of any already processed datafile
+      -t, --train           train the classifier on the newest class_metric dataframe
+      -fc, --force          force re-calculation
+      -cf CLASSIFIER [CLASSIFIER ...], --classifier CLASSIFIER [CLASSIFIER ...]
+                            path to the classifier.hdf5 file
+      -p, --plot            Vizualize training outcome
+
+### Training your classifier
+
+First, you will need to train a classifier.  To do this, use the metrics generated previously:
+
+`python ML_classify.py -i ./data/training_dataset.tsv -cf ../classifier/test_classifier.hdf5 -t -p`
+
+*Note*: These metrics are depedent on experimental conditions and recording equipment. If you are using your own data, validation using your own data will need to be done to ensure proper classification.
+
+With the plot flag `-p`, two plots are displayed:
+1) Each component along the x-axis, across various experiments (labeled on top of graph).  Each component has a confidence of either artifact or neural classification.  False positives and false negatives are identified with vertical lines.
+2) ROC plot utilized in Supplmental figure 7 (PLOS, https://doi.org/10.1371/journal.pcbi.1011085)
+
+The training will output accuracy of various trained models score, precision, and recall are all displayed. Neural vs artifact accuracy are also displayed:
+
+                        score  precision  recall  neural acc.  artifact acc.
+    classifier                                                              
+    LogisticRegression   0.95       0.96    0.97         0.97           0.89
+    GaussianNB           0.93       0.97    0.94         0.94           0.92
+    SVM                  0.96       0.97    0.97         0.97           0.93
+    RandomForest         0.96       0.97    0.98         0.98           0.92
+    Voting               0.96       0.97    0.98         0.98           0.92
+
+You can load in several dataframes to train your data (this will load both training and novel datasets):
+
+`python ML_classify.py -i ./data/*_dataset.tsv -cf ../classifier/test_classifier.hdf5 -t`
+
+### Testing your classifier
+
+Once you have a trained classifier, you can test the classifier on novel data (do not test your classifier on any data used to train the model):
+
+`python ML_classify.py -i ./data/novel_dataset.tsv -cf ../classifier/test_classifier.hdf5 -uc`
+
+
+### Updating your files
+
+`-uc` flag will create a new column on the dataframe specified as machine identified neural components: 'm_neural'.  Accuracy comparisons will print in the terminal window.
+
+    Accuracy comparing human to machine classification: 96.03 %
+    HDF5 will not be updated. File was not found or specified.
+
+    Saving to file:  ./data/novel_dataset.tsv
+
+If you give the `-uc` flag and `INPUT_HDF5`, the script will update the `ICA.hdf5` files with the artifact classification. Put in a single file, list or `*` wildcard expansion. Each component identity will be based on unique index generated in metrics file. 
+
+`python ML_classify.py -i ./data/novel_dataset.tsv -h5 path/to/*ICA.hdf5 -cf ../classifier/test_classifier.hdf5 -uc`
+
+
+

@@ -34,6 +34,7 @@ except Exception as e:
     print('Error importing hdf5manager')
     print('\t ERROR : ', e)
 
+
 def splitData(dataFrame, signal, value_fill=0, n_splits=10, test_size=0.30):
         
         y = signal
@@ -46,10 +47,13 @@ def splitData(dataFrame, signal, value_fill=0, n_splits=10, test_size=0.30):
 
         return X_train, X_test, y_train, y_test
 
+
 if __name__ == '__main__':
 
     import argparse
     import time
+    import datetime
+
     # Argument Parsing
     # -----------------------------------------------
     ap = argparse.ArgumentParser()
@@ -85,6 +89,7 @@ if __name__ == '__main__':
     assert os.path.exists(class_dir), 'Classifier directory does not exist: {}'.format(class_dir)
     confidencepath = classifier[:-5] + '_confidence.tsv'
 
+    group = None
     try:
         group = args['group_path'][0]
         assert os.path.exists(os.path.dirname(group)), 'Unknown directory for group save: {}'.format(group)
@@ -92,12 +97,21 @@ if __name__ == '__main__':
         group = None
 
     if args['updateClass']:
-        hdf5path = args['input_hdf5'][0]
-        assert os.path.exists(hdf5path), 'Could not find hdf5 file: {}'.format(hdf5path)
-
+        if args['input_hdf5']!= None:
+            hdf5paths = [hpath.name for hpath in args['input_hdf5']]
+            print('HDF5 input(s) found:')
+            for hpath in hdf5paths:
+                if hpath.endswith('.hdf5') & os.path.exists(hpath):
+                    print('\t'+ hpath)  
+                else:
+                    print('DATA NOT FOUND OR UNKNOWN FILE FORMAT: ', hpath)
+                    hdf5paths.remove(hpath)
+        else:
+            hdf5paths = None
+            print('\nHDF5 file will not be updated. If you desire this to be the case, add the path to the file in the input_hdf5')
     try:
         g = h5(classifier)
-        print('Loading metric list to train the classifier from:', classifier)
+        print('\nLoading metric list to train the classifier from:', classifier)
         domain_vars = g.load('domain_keys')
         rnd_clf = g.load('rnd_clf')
     except:
@@ -110,12 +124,11 @@ if __name__ == '__main__':
 
     if args['input_tsv'] != None:
         paths = [path.name for path in args['input_tsv']]
-        print('Input found:')
+        print('TSV input(s) found:')
         [print('\t'+path) for path in paths]
 
         p = -1
         for path in paths:
-            print('Processing file:', path)
             if path.endswith('.tsv') & os.path.exists(path):
                 p += 1
                 print('Loading data: ', path)
@@ -136,8 +149,6 @@ if __name__ == '__main__':
             group_load = False
 
     if args['updateClass']:
-        
-        print("Updating the classification of components based on current classifier.")
 
         try:
             datacopy = main_data.drop('age', axis =1).copy()
@@ -153,52 +164,50 @@ if __name__ == '__main__':
         
         X_train = datacopy[domain_vars].fillna(value=0)
 
-        try:
-            y_train = main_data['neural'].fillna(value=0)
-            print('Loading signal data')
-
-        except Exception as e:
-            print ('ERROR: ', e)
-            print('Loading signal data')
-            y_train = main_data['signal'].fillna(value=0)
-            print('ytrain loaddd')
+        y_train = main_data['neural'].fillna(value=0)
 
         if np.sum(y_train) == 0:
-            print('No classifications were found.')
+            print('\tNo classifications were found.')
             print('\tPredicting classes')
             new = True
         else:
-            print('Previous classification found.')
+            print('\tUpdating the classification of components based on current classifier.')
             print('\tPredicting classes, saving as a new column')
             new = False
 
         #run classifier
-        main_data['m_signal'] = rnd_clf.predict(X_train)
+        main_data['m_neural'] = rnd_clf.predict(X_train)
 
         if not new:
-            accuracy = np.sum(main_data['m_signal']==main_data['signal'])/len(main_data)
-            print('Accuracy comparing human to machine classification: {} %'.format(np.round(accuracy*100,2)))
+            accuracy = np.sum(main_data['m_neural']==main_data['neural'])/len(main_data)
+            print('\nAccuracy comparing human to machine classification: {} %'.format(np.round(accuracy*100,2)))
 
-        main_data['artifact'] = np.array(main_data['m_signal'] == 0).astype(int)
-        print('\tSaving artifact_component to ', hdf5path)
+        main_data['artifact'] = np.array(main_data['m_neural'] == 0).astype(int)
         
-        if os.path.exists(hdf5path):
-            f = h5(hdf5path)
-            noise = f.load('noise_components')
-            notnoise_index = np.where(noise==0)[0]
-            indices = [base[:-9] + '-' + '{}'.format(str(i).zfill(4)) for i in notnoise_index]
-            artifact = noise.copy() * 0
-            artifact[notnoise_index] = main_data.loc[indices, 'artifact'].values.tolist()
-            f.save({'artifact_components': artifact})
+        if hdf5paths != None:
+            for hpath in hdf5paths:
+                f = h5(hpath)
+                noise = f.load('noise_components')
+                notnoise_index = np.where(noise==0)[0]
+                
+                base = os.path.basename(hpath)
+                indices = [base[:-9] + '-' + '{}'.format(str(i).zfill(4)) for i in notnoise_index]
+
+                artifact = noise.copy() * 0
+                artifact[notnoise_index] = main_data.loc[indices, 'artifact'].values.tolist()
+                f.save({'artifact_components': artifact})
+                print('\tSaving artifact_component to ', hpath)
         else:
-            print('hdf5 file was not found or specified.')
+            print('HDF5 will not be updated. File was not found or specified.')
 
         if group == None:
             if group_load:
-                print('Multiple files loaded, unsure as to what to save the file as. If you desire this data to be saved, use the group_path argument')
+                print('\nMultiple files loaded, unsure as to what to save the file as. If you desire this data to be saved, use the group_path argument')
             else:
+                print('\nSaving to file: ', path)
                 main_data.to_csv(path, sep = '\t')
         else:
+            print('\nSaving to file: ', group)
             main_data.to_csv(group, sep = '\t')
         
 
@@ -219,10 +228,7 @@ if __name__ == '__main__':
         datacopy[:] = scaler.transform(datacopy.values)
         datacopy = datacopy.fillna(value=0)
 
-        try:
-            X_train, X_test, y_train, y_test = splitData(datacopy.loc[:,domain_vars].copy(), main_data.loc[:,'neural'].fillna(value=0).copy())
-        except: 
-            X_train, X_test, y_train, y_test = splitData(datacopy.loc[:,domain_vars].copy(), main_data.loc[:,'signal'].fillna(value=0).copy())
+        X_train, X_test, y_train, y_test = splitData(datacopy.loc[:,domain_vars].copy(), main_data.loc[:,'neural'].fillna(value=0).copy())
 
         Xlen = len(main_data)
 
@@ -305,7 +311,7 @@ if __name__ == '__main__':
         classConfidence.loc[X_test.index, 'voting_clf_prob'] = voting_clf.predict_proba(X_test)[:,1]
         classConfidence.loc[X_train.index, 'voting_clf_prob'] = voting_clf.predict_proba(X_train)[:,1]   
 
-        scores_df = pd.DataFrame(columns=['classifier', 'score', 'precision', 'recall', 'signal acc.', 'artifact acc.'])
+        scores_df = pd.DataFrame(columns=['classifier', 'score', 'precision', 'recall', 'neural acc.', 'artifact acc.'])
         scores_df.loc[0] = ['LogisticRegression'] + [logreg_score] + [logreg_precision] + [logreg_recall] + [logreg_signal] + [logreg_artifact]
         scores_df.loc[1] = ['GaussianNB'] + [gnb_score] + [gnb_precision] + [gnb_recall] + [gnb_signal] + [gnb_artifact]
         scores_df.loc[2] = ['SVM'] + [svm_score] + [svm_precision] + [svm_recall] + [svm_signal] + [svm_artifact]
@@ -319,9 +325,13 @@ if __name__ == '__main__':
         classConfidence.to_csv(confidencepath, sep = '\t')
 
         g = h5(classifier)
-        g.save({
+        dt = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        g.save({'datafiles':paths,
+            'date - time': dt,
             'rnd_clf':rnd_clf, 
-            'domain_keys': domain_vars})        
+            'domain_keys': domain_vars})
+        print('\nUpdating and saving classifier on ', dt)
+        g.print()        
 
         if args['plot']:
             from sklearn.metrics import roc_auc_score
@@ -343,14 +353,18 @@ if __name__ == '__main__':
 
             alphas = [0.25, 0.25, 0.25, 0.25, 1] 
             colors = sns.color_palette()
-            clfs = ['logreg_prob', 'gnb_prob', 'SVC_prob', 'rnd_clf_prob' ,'voting_clf_prob']
+            clfs = [#'logreg_prob', 'gnb_prob', 'SVC_prob', 
+                    'rnd_clf_prob', 
+                    #,'voting_clf_prob'
+                    ]
             
             classConfidence.loc[X_train.index,'predicted'] = rnd_clf.predict(X_train)
             classConfidence.loc[X_test.index,'predicted'] = rnd_clf.predict(X_test)
             classConfidence = classConfidence.sort_index()
 
             classConfidence['x'] = np.arange(len(classConfidence))
-            classConfidence.loc[main_data.index, 'marked'] = main_data.loc[main_data.index, 'signal']
+
+            classConfidence.loc[main_data.index, 'marked'] = main_data.loc[main_data.index, 'neural']
             classConfidence['false'] = classConfidence['predicted'] - classConfidence['marked']
 
             for i, clf in enumerate(clfs):
@@ -361,7 +375,7 @@ if __name__ == '__main__':
                     classConfidence.plot(kind = 'scatter', x = 'x', y= clf, label = clf,
                                          color = colors[i], alpha = alphas[i], grid=False, ax = ax1)
             plt.axhline(y = 0, color = 'k', linestyle = '--')
-            plt.ylabel('artifact                                  signal')
+            plt.ylabel('artifact                                  Neural')
 
             xlabel = []
             falsePos = True
