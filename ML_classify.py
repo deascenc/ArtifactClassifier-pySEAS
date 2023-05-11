@@ -14,7 +14,9 @@ import sys
 import numpy as np
 import pandas as pd
 
+# DA: harcoded path, how do we generalize to ensure the project can be found?  
 sys.path.append('/home/feldheimlab/Documents/pySEAS/')
+
 # data visualization
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -212,6 +214,24 @@ if __name__ == '__main__':
         
 
     #Save file for future manipulations
+    
+    '''
+    Classifier Algorithms Used For Comparison 
+    from the scit-kitlearn library
+    
+    Logistic Regression: 
+    
+    Gaussian Naive Bayes: 
+    
+    Support Vector Machine: 
+    
+    Random Forest:
+    
+    Voting Classifier: used for voting on which 
+    classifier algorithm above performed the best 
+    
+    
+    '''
 
     if args['train']:
 
@@ -401,7 +421,7 @@ if __name__ == '__main__':
                     plt.axvspan(xmin=i, xmax =end_exp[j]+1, color='k', alpha=0.1)
                 plt.text(i, 1.05, classConfidence.index[i])
             
-            # plt.xticks(start_exp, xlabel)
+            # DA: Removed the ticks(start_exp, xlabel)
             leg = plt.legend(title = 'Types of Classifier', bbox_to_anchor=(1.01, 1), loc=2, borderaxespad=0.)
             leg.get_frame().set_linewidth(0.0)
             plt.xlabel('Num of Domains')
@@ -453,5 +473,6 @@ if __name__ == '__main__':
             plt.ylabel('True Positive Rate')
             plt.title('Receiver operating characteristic')
             plt.legend(loc="lower right")
-            # plt.savefig('rnd_ROC.svg')
+            # DA: Removed the savefig call 
             plt.show()
+            
